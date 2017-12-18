@@ -1,0 +1,9 @@
+{:base-conn-str "jdbc:mysql://.../"
+ :joyoi-oj-db {:classname "com.mysql.jdbc.Driver"
+               :connection-uri (str base-conn-str "joyoi_oj")
+               :user ""
+               :password ""}
+ :tyvj-db {:connection-uri "jdbc:mysql://127.0.0.1:3306/tyvj"
+           :user "" :password ""
+           :auto-commit? false
+           :read-only? true}}

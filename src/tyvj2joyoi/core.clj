@@ -9,16 +9,21 @@
            (java.util Base64 UUID)
            (org.jsoup Jsoup)
            (org.jsoup.safety Whitelist)
-           (org.jsoup.nodes Document$OutputSettings)))
+           (org.jsoup.nodes Document$OutputSettings)
+           (java.io File)))
 
 (def configs (read-string (slurp "config.edn")))
 (def base-conn-str (:base-conn-str configs))
 (def joyoi-oj-db (assoc (:joyoi-oj-db configs)
                    :connection-uri (str base-conn-str "joyoi_oj")))
-(def joyoi-mgmtsvc-db (assoc joyoi-oj-db :connection-uri (str base-conn-str "joyoi_mgmtsvc")))
-(def joyoi-blog-db (assoc joyoi-oj-db :connection-uri (str base-conn-str "joyoi_blog")))
+(def joyoi-mgmtsvc-db (assoc joyoi-oj-db
+                        :connection-uri (str base-conn-str "joyoi_mgmtsvc")))
+(def joyoi-blog-db (assoc joyoi-oj-db
+                     :connection-uri (str base-conn-str "joyoi_blog")))
 (def tyvj-db (merge joyoi-oj-db
                     (:tyvj-db configs)))
+(def mgmtsvc-restore-db (:restore-db configs))
+(def mgmtsvc-restore-conn (sql/get-connection mgmtsvc-restore-db))
 (def joyoi-oj-conn (sql/get-connection joyoi-oj-db))
 (def joyoi-mgmtsvc-conn (sql/get-connection joyoi-mgmtsvc-db))
 (def tyvj-conn (doto (sql/get-connection tyvj-db) (.setAutoCommit false)))
@@ -182,6 +187,36 @@
                   (swap! fixed conj problemid)
                   (fix-problem-test-cases problemid))))
             batch-rows))))))
+
+(defn recover-blob-integrity []
+  (let [uuid-regex #"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+        files (.listFiles (File. "recover.blob"))
+        ids-to-fix (into #{}
+                         (apply concat
+                                (map (fn [f]
+                                       (->> (.getAbsolutePath f)
+                                            (slurp)
+                                            (re-seq uuid-regex))) files)))
+        select-blob-by-blob-id "select * from blobs where BlobId = ?"
+        query-production (sql/prepare-statement joyoi-mgmtsvc-conn select-blob-by-blob-id)
+        query-restore (sql/prepare-statement mgmtsvc-restore-conn select-blob-by-blob-id)
+        insert-row (fn [row] (sql/insert! joyoi-mgmtsvc-conn :blobs row))]
+    (println "recovering" (count ids-to-fix) "blobs" ids-to-fix)
+    (doseq [blob-id ids-to-fix]
+      (println "checking" blob-id)
+      (when (empty? (sql/query joyoi-mgmtsvc-db [query-production blob-id]))
+        (println "found missing" blob-id)
+        (let [rows (sql/query mgmtsvc-restore-db [query-restore blob-id])]
+          (println "found" (count rows) "rows to recover")
+          (doseq [{:keys [id] :as row} rows]
+            (try
+              (println "inserting row:" row)
+              (insert-row row)
+              (catch Exception e
+                (println "retrying inserting row:" row)
+                (insert-row (assoc row
+                              :id (gen-uuid)))))))))))
+
 
 (defn migrate-problems []
   (let [problem-stmt (sql/prepare-statement

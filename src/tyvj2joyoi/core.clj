@@ -13,7 +13,8 @@
 
 (def configs (read-string (slurp "config.edn")))
 (def base-conn-str (:base-conn-str configs))
-(def joyoi-oj-db (:joyoi-oj-db configs))
+(def joyoi-oj-db (assoc (:joyoi-oj-db configs)
+                   :connection-uri (str base-conn-str "joyoi_oj")))
 (def joyoi-mgmtsvc-db (assoc joyoi-oj-db :connection-uri (str base-conn-str "joyoi_mgmtsvc")))
 (def joyoi-blog-db (assoc joyoi-oj-db :connection-uri (str base-conn-str "joyoi_blog")))
 (def tyvj-db (merge joyoi-oj-db

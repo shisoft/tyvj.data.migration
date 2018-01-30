@@ -4,7 +4,8 @@
             [clojure.stacktrace]
             [less.awful.ssl :as ssl]
             [org.httpkit.client :as http]
-            [cheshire.core :as json])
+            [cheshire.core :as json]
+            [clojure.java.io :as io])
   (:import (java.util Date)
            (java.util Base64 UUID)
            (org.jsoup Jsoup)
@@ -22,11 +23,11 @@
                      :connection-uri (str base-conn-str "joyoi_blog")))
 (def tyvj-db (merge joyoi-oj-db
                     (:tyvj-db configs)))
-(def mgmtsvc-restore-db (:restore-db configs))
-(def mgmtsvc-restore-conn (sql/get-connection mgmtsvc-restore-db))
+;(def mgmtsvc-restore-db (:restore-db configs))
+;(def mgmtsvc-restore-conn (sql/get-connection mgmtsvc-restore-db))
 (def joyoi-oj-conn (sql/get-connection joyoi-oj-db))
 (def joyoi-mgmtsvc-conn (sql/get-connection joyoi-mgmtsvc-db))
-(def tyvj-conn (doto (sql/get-connection tyvj-db) (.setAutoCommit false)))
+;(def tyvj-conn (doto (sql/get-connection tyvj-db) (.setAutoCommit false)))
 
 (defn mgmt-ssl-engine []
   (let [passwd (char-array "123456")]
@@ -98,7 +99,7 @@
             (println "Error on insertion")
             (clojure.stacktrace/print-cause-trace e)))))))
 
-(defn migrate-test-cases []
+#_(defn migrate-test-cases []
   (let [rows (first (second (sql/query tyvj-db ["select count(*) from test_cases"]
                                        {:as-arrays? true})))
         batch-size 128
@@ -188,7 +189,7 @@
                   (fix-problem-test-cases problemid))))
             batch-rows))))))
 
-(defn recover-blob-integrity []
+#_(defn recover-blob-integrity []
   (let [uuid-regex #"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
         files (.listFiles (File. "recover.blob"))
         ids-to-fix (into #{}
@@ -218,7 +219,7 @@
                               :id (gen-uuid)))))))))))
 
 
-(defn migrate-problems []
+#_(defn migrate-problems []
   (let [problem-stmt (sql/prepare-statement
                        tyvj-conn "select * from problems"
                        {:fetch-size 10})
@@ -342,6 +343,29 @@
           (println "Insert:" (:Title joyoi-post)
                    "for:" problem_id)
           (sql/insert! joyoi-blog-db :posts joyoi-post))))))
+
+(defn move-testcases-to-storage []
+  (dorun
+    (sql/query
+      joyoi-oj-db
+      ["SELECT * FROM testcases"]
+      {:row-fn
+       (fn [testcase]
+         (let [{:keys [id inputblobid outputblobid problemid]} testcase
+               put-storage (fn [blob-id problem-id data-id data-type]
+                             (let [blob (first (second (sql/query joyoi-mgmtsvc-db
+                                                                  ["SELECT Body from blobs WHERE BlobId = ?" blob-id]
+                                                                  {:as-arrays? true})))
+                                   mount-point "/home/shisoft/Documents/JoyOI/mgmtsvc_blobs/"
+                                   file-dir (str mount-point "testcases/" problem-id "/sample/")
+                                   file-path (str file-dir data-id "." (name data-type))]
+                               (.mkdirs (File. file-dir))
+                               (println (String. blob))
+                               (io/copy (io/input-stream blob) (io/file file-path))
+                               (println "Copied:" file-path)))
+               ]
+           (put-storage inputblobid problemid id :in)
+           (put-storage outputblobid problemid id :out)))})))
 
 (defn -main
   [& args]

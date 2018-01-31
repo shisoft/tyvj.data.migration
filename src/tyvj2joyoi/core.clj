@@ -354,23 +354,40 @@
        (fn [testcase]
          (let [{:keys [id inputblobid outputblobid problemid]} testcase
                put-storage (fn [blob-id problem-id data-id data-type]
-                             (let [blob (let [body (:body @(http/request
-                                                             {:url       (str "https://mgmtsvc.1234.sh/api/v1/Blob/" blob-id)
-                                                              :method    :get
-                                                              :sslengine (mgmt-ssl-engine)}))
+                             (let [blob (let [response @(http/request
+                                                          {:url       (str "https://mgmtsvc.1234.sh/api/v1/Blob/" blob-id)
+                                                           :method    :get
+                                                           :sslengine (mgmt-ssl-engine)
+                                                           :timeout 600000})
+                                              body (:body response)
                                               body-json (json/parse-string body keyword)
                                               blob-body (get-in body-json [:data :body])]
-                                          (.decode (Base64/getDecoder) blob-body))
+                                          (if blob-body
+                                            (.decode (Base64/getDecoder) blob-body)
+                                            (println "Found null blob, http response:" response)))
                                    mount-point "/home/shisoft/Documents/JoyOI/mgmtsvc_blobs/"
                                    file-dir (str mount-point "testcases/" problem-id "/sample/")
-                                   file-path (str file-dir data-id "." (name data-type))]
+                                   file-name (str data-id "." (name data-type))
+                                   file-path (str file-dir file-name)
+                                   file (File. file-path)]
+                               (when (.exists file)
+                                 (println "deleting" file-name "for" problem-id)
+                                 (.delete file))
                                (.mkdirs (File. file-dir))
-                               (println (String. blob))
-                               (io/copy (io/input-stream blob) (io/file file-path))
-                               (println "Copied:" file-path)))
-               ]
-           (put-storage inputblobid problemid id :in)
-           (put-storage outputblobid problemid id :out)))})))
+                               (if blob
+                                 (do (io/copy (io/input-stream blob) (io/file file-path))
+                                     (println "Copied:" file-name "for" problem-id))
+                                 (println "Skipped:" file-name "for" problem-id))))
+               with-retry (fn [f n]
+                            (loop [n n]
+                              (when
+                                (and
+                                  (> n 0)
+                                  (try (f)
+                                       (catch Exception _ true)))
+                                (recur (dec n)))))]
+           (with-retry (fn [] (put-storage inputblobid problemid id :in)) 5)
+           (with-retry (fn [] (put-storage outputblobid problemid id :out)) 5)))})))
 
 (defn -main
   [& args]

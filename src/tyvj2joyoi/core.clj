@@ -11,7 +11,8 @@
            (org.jsoup Jsoup)
            (org.jsoup.safety Whitelist)
            (org.jsoup.nodes Document$OutputSettings)
-           (java.io File)))
+           (java.io File)
+           (java.util.Base64)))
 
 (def configs (read-string (slurp "config.edn")))
 (def base-conn-str (:base-conn-str configs))
@@ -353,9 +354,13 @@
        (fn [testcase]
          (let [{:keys [id inputblobid outputblobid problemid]} testcase
                put-storage (fn [blob-id problem-id data-id data-type]
-                             (let [blob (first (second (sql/query joyoi-mgmtsvc-db
-                                                                  ["SELECT Body from blobs WHERE BlobId = ?" blob-id]
-                                                                  {:as-arrays? true})))
+                             (let [blob (let [body (:body @(http/request
+                                                             {:url       (str "https://mgmtsvc.1234.sh/api/v1/Blob/" blob-id)
+                                                              :method    :get
+                                                              :sslengine (mgmt-ssl-engine)}))
+                                              body-json (json/parse-string body keyword)
+                                              blob-body (get-in body-json [:data :body])]
+                                          (.decode (Base64/getDecoder) blob-body))
                                    mount-point "/home/shisoft/Documents/JoyOI/mgmtsvc_blobs/"
                                    file-dir (str mount-point "testcases/" problem-id "/sample/")
                                    file-path (str file-dir data-id "." (name data-type))]
